@@ -10,11 +10,11 @@ const int COLUMN_NUM = 4;
 const String PASSWORD = "1234A"; // Change your password here
 const int BACKLIGHT_BRIGHTNESS = 95;
 const unsigned long time_cool_down = 7000; // Cooldown en ms
-const int LED_PIN_DETECTED = 9;
+const int LED_PIN_DETECTED = 12;
 const bool SON_ALARME = false;
 
 // Configuration Telegram via Proxy
-const char* PROXY_HOST = "192.168.1.1";
+const char* PROXY_HOST = "192.168.1.104";
 const int PROXY_PORT = 8080;
 
 // LED Pins
@@ -40,8 +40,6 @@ String input_password = "";
 // Variables de timing
 unsigned long lastBlinkTime = 0;
 unsigned long lastBlinkAlarmTime = 0;
-unsigned long lastMessageCheck = 0;
-unsigned long lastCommandCheck = 0;
 unsigned long lastLCDUpdate = 0;
 unsigned long pir_last_active = 0;
 unsigned long rfid_last_active = 0;
@@ -49,8 +47,6 @@ unsigned long rfid_last_active = 0;
 // Constantes de timing
 const unsigned long BLINK_INTERVAL = 300;
 const unsigned long BLINK_ALARM_INTERVAL = 300;
-const unsigned long MESSAGE_CHECK_INTERVAL = 5000;
-const unsigned long COMMAND_CHECK_INTERVAL = 2000;
 const unsigned long LCD_UPDATE_INTERVAL = 100;
 const unsigned long KEYPAD_DEBOUNCE = 10;
 const unsigned long RFID_CHECK_INTERVAL = 20;
@@ -59,7 +55,7 @@ const unsigned long RFID_CHECK_INTERVAL = 20;
 const int PIR_PIN = 22;
 const int LED_PIN = 13;
 const int BACKLIGHT_PIN = 8;
-const int BUZZER_PIN = 12;
+const int BUZZER_PIN = 5;
 const int RS = 29, EN = 30, D4 = 26, D5 = 27, D6 = 24, D7 = 25;
 const int SS_PIN = 53, RST_PIN = 49; // RFID pins
 
@@ -94,9 +90,6 @@ String authorizedUIDs[] = {"67C3A060"}; // Liste des badges autorisés
 // Variables pour le clignotement des LEDs
 bool ledState = false;
 
-// Variables pour la vérification des commandes
-long lastMessageId = 0;
-
 // Function declarations
 void initializeLCD();
 void handlePIR();
@@ -108,13 +101,15 @@ void displayMessage(const String &message);
 void handleRFID();
 void handleAlarme();
 void sendTelegramMessage(const String& message);
-void checkTelegramMessages();
-void checkTelegramCommands();
+void checkHardware();
 
 void setup()
 {
   Serial.begin(9600);
   Serial.println("Initialisation du système...");
+  
+  // Vérification du matériel après l'initialisation de la communication série
+  //checkHardware();
   
   SPI.begin();
   Serial.println("SPI initialisé");
@@ -228,6 +223,9 @@ void updateBacklight()
 // Process keypad input
 void processKey(char key)
 {
+  // Envoyer dans la console la touche pressée
+  Serial.print("Touche pressée: ");
+  Serial.println(key);
   // Suppression du délai de rafraîchissement LCD initial
   if (input_password.length() == 0) {
     lcd.clear();
@@ -338,6 +336,35 @@ void handleEthernetClient()
     {
       alarm = false;
       setAlarmState(false, "interface web");
+    }
+    else if (request.indexOf("GET /telegram_command") != -1)
+    {
+      // Endpoint pour recevoir les commandes Telegram
+      String command = "";
+      int start = request.indexOf("command=") + 8;
+      int end = request.indexOf(" ", start);
+      if (start > 8 && end > start) {
+        command = request.substring(start, end);
+        
+        if (command == "ON") {
+          if (!alarm) {
+            alarm = true;
+            setAlarmState(true, "commande Telegram");
+          }
+        } else if (command == "OFF") {
+          if (alarm) {
+            alarm = false;
+            setAlarmState(false, "commande Telegram");
+          }
+        }
+      }
+      
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/plain");
+      client.println();
+      client.println("OK");
+      client.stop();
+      return;
     }
     else if (request.indexOf("GET /status") != -1)
     {
@@ -602,118 +629,118 @@ void sendTelegramMessage(const String& message) {
   Serial.println("Fin de l'envoi du message\n");
 }
 
-// Fonction pour vérifier les commandes Telegram
-void checkTelegramCommands() {
-  EthernetClient client;
+// Fonction pour vérifier les pins et les modules
+void checkHardware() {
+  Serial.println("\n=== Vérification du matériel ===");
   
-  if (client.connect(PROXY_HOST, PROXY_PORT)) {
-    // Demander s'il y a des commandes en attente
-    client.println("GET /checkCommand HTTP/1.1");
-    client.print("Host: ");
-    client.println(PROXY_HOST);
-    client.println("Connection: close");
-    client.println();
-    
-    // Attendre et lire la réponse
-    String response = "";
-    unsigned long timeout = millis();
-    bool headersDone = false;
-    
-    while (client.connected() && (millis() - timeout < 5000)) {
-      while (client.available()) {
-        String line = client.readStringUntil('\n');
-        
-        if (!headersDone) {
-          if (line == "\r") {
-            headersDone = true;
-          }
-          continue;
-        }
-        
-        response = line;
-        break;
-      }
-      
-      if (response.length() > 0) {
-        break;
-      }
+  // Vérification du clavier matriciel
+  Serial.println("\nVérification du clavier matriciel...");
+  for(int i = 0; i < ROW_NUM; i++) {
+    pinMode(pin_rows[i], INPUT_PULLUP);
+    Serial.print("  Ligne ");
+    Serial.print(i);
+    Serial.print(" (Pin ");
+    Serial.print(pin_rows[i]);
+    Serial.print("): ");
+    if(digitalRead(pin_rows[i]) == HIGH) {
+      Serial.println("OK");
+    } else {
+      Serial.println("ERREUR - Vérifiez le branchement");
     }
-    
-    response.trim();
-    if (response == "ON") {
-      if (!alarm) {
-        alarm = true;
-        setAlarmState(true, "commande Telegram");
-      }
-    } else if (response == "OFF") {
-      if (alarm) {
-        alarm = false;
-        setAlarmState(false, "commande Telegram");
-      }
-    }
-    
-    client.stop();
   }
-}
+  for(int i = 0; i < COLUMN_NUM; i++) {
+    pinMode(pin_columns[i], OUTPUT);
+    digitalWrite(pin_columns[i], LOW);
+    Serial.print("  Colonne ");
+    Serial.print(i);
+    Serial.print(" (Pin ");
+    Serial.print(pin_columns[i]);
+    Serial.print("): ");
+    if(digitalRead(pin_columns[i]) == LOW) {
+      Serial.println("OK");
+    } else {
+      Serial.println("ERREUR - Vérifiez le branchement");
+    }
+  }
 
-// Fonction pour vérifier les messages Telegram
-void checkTelegramMessages() {
-  EthernetClient client;
+  // Vérification de l'écran LCD
+  Serial.println("\nVérification de l'écran LCD...");
+  lcd.begin(16, 2);
+  lcd.clear();
+  lcd.print("Test LCD");
+  Serial.println("  Message affiché sur LCD - Vérifiez l'affichage");
+
+  // Vérification des LEDs
+  Serial.println("\nVérification des LEDs...");
+  const int ledPins[] = {LED_PIN, LED_PIN_ALARME_ON, LED_PIN_ALARME_OFF, LED_PIN_DETECTED, BACKLIGHT_PIN};
+  const String ledNames[] = {"LED principale", "LED Alarme ON", "LED Alarme OFF", "LED Détection", "Rétroéclairage"};
   
-  if (client.connect(PROXY_HOST, PROXY_PORT)) {
-    // Demander les nouveaux messages
-    client.println("GET /getUpdates HTTP/1.1");
-    client.print("Host: ");
-    client.println(PROXY_HOST);
-    client.println("Connection: close");
-    client.println();
+  for(int i = 0; i < 5; i++) {
+    Serial.print("  ");
+    Serial.print(ledNames[i]);
+    Serial.print(" (Pin ");
+    Serial.print(ledPins[i]);
+    Serial.print("): ");
     
-    // Attendre et lire la réponse
-    String response = "";
-    unsigned long timeout = millis();
-    bool headersDone = false;
-    
-    while (client.connected() && (millis() - timeout < 5000)) {
-      while (client.available()) {
-        String line = client.readStringUntil('\n');
-        
-        if (!headersDone) {
-          if (line == "\r") {
-            headersDone = true;
-          }
-          continue;
-        }
-        
-        response = line;
-        break;
-      }
-      
-      if (response.length() > 0) {
-        break;
-      }
+    pinMode(ledPins[i], OUTPUT);
+    digitalWrite(ledPins[i], HIGH);
+    delay(500);
+    if(digitalRead(ledPins[i]) == HIGH) {
+      Serial.println("OK");
+    } else {
+      Serial.println("ERREUR - Vérifiez le branchement");
     }
-    
-    if (response.startsWith("NEW_MESSAGE")) {
-      // Extraire le message et l'afficher sur l'écran LCD
-      int messageStart = response.indexOf("MESSAGE:") + 8;
-      if (messageStart > 8) {
-        String messageContent = response.substring(messageStart);
-        // Afficher sur l'écran LCD
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Nouveau message:");
-        lcd.setCursor(0, 1);
-        // Limiter à 16 caractères (largeur de l'écran)
-        lcd.print(messageContent.substring(0, min(16, messageContent.length())));
-        delay(3000); // Afficher pendant 3 secondes
-        
-        // Restaurer l'affichage normal
-        lcd.clear();
-        lcd.setCursor(0, 1);
-        lcd.print(alarm ? "Alarme ON " : "Alarme OFF");
-      }
-    }
-    
-    client.stop();
+    digitalWrite(ledPins[i], LOW);
   }
+
+  // Vérification du buzzer
+  Serial.println("\nVérification du buzzer...");
+  Serial.print("  Buzzer (Pin ");
+  Serial.print(BUZZER_PIN);
+  Serial.print("): ");
+  pinMode(BUZZER_PIN, OUTPUT);
+  tone(BUZZER_PIN, 1000, 500);
+  Serial.println("Test sonore - Vérifiez si vous entendez le son");
+  delay(500);
+  noTone(BUZZER_PIN);
+
+  // Vérification du capteur PIR
+  Serial.println("\nVérification du capteur PIR...");
+  Serial.print("  PIR (Pin ");
+  Serial.print(PIR_PIN);
+  Serial.print("): ");
+  pinMode(PIR_PIN, INPUT);
+  int pirValue = digitalRead(PIR_PIN);
+  Serial.print("Valeur actuelle: ");
+  Serial.println(pirValue);
+  Serial.println("  Déplacez-vous devant le capteur pour tester");
+
+  // Vérification du module RFID
+  Serial.println("\nVérification du module RFID...");
+  Serial.print("  RFID SS (Pin ");
+  Serial.print(SS_PIN);
+  Serial.print("): ");
+  pinMode(SS_PIN, OUTPUT);
+  digitalWrite(SS_PIN, HIGH);
+  if(digitalRead(SS_PIN) == HIGH) {
+    Serial.println("OK");
+  } else {
+    Serial.println("ERREUR - Vérifiez le branchement");
+  }
+  
+  Serial.print("  RFID RST (Pin ");
+  Serial.print(RST_PIN);
+  Serial.print("): ");
+  pinMode(RST_PIN, OUTPUT);
+  digitalWrite(RST_PIN, HIGH);
+  if(digitalRead(RST_PIN) == HIGH) {
+    Serial.println("OK");
+  } else {
+    Serial.println("ERREUR - Vérifiez le branchement");
+  }
+
+  Serial.println("\n=== Fin de la vérification ===");
+  Serial.println("Veuillez vérifier que tous les tests sont OK");
+  Serial.println("Si un test échoue, vérifiez le branchement correspondant");
+  delay(3000); // Attente pour lire les messages
 }
